@@ -28,14 +28,13 @@ use JMS\Serializer\Metadata\ClassMetadata;
 use JMS\Serializer\Metadata\PropertyMetadata;
 use Metadata\MetadataFactory;
 use Metadata\MetadataFactoryInterface;
-use PhpCollection\Map;
 
 abstract class Context
 {
     /**
-     * @var \PhpCollection\Map
+     * @var array
      */
-    public $attributes;
+    private $attributes = array();
 
     private $format;
 
@@ -61,7 +60,6 @@ abstract class Context
 
     public function __construct()
     {
-        $this->attributes = new Map();
     }
 
     /**
@@ -106,10 +104,20 @@ abstract class Context
         return $this->exclusionStrategy;
     }
 
+    public function getAttribute($key)
+    {
+        return $this->attributes[$key];
+    }
+
+    public function hasAttribute($key)
+    {
+        return isset($this->attributes[$key]);
+    }
+
     public function setAttribute($key, $value)
     {
         $this->assertMutable();
-        $this->attributes->set($key, $value);
+        $this->attributes[$key] = $value;
 
         return $this;
     }
@@ -156,7 +164,7 @@ abstract class Context
             throw new \LogicException('The version must not be null.');
         }
 
-        $this->attributes->set('version', $version);
+        $this->attributes['version'] = $version;
         $this->addExclusionStrategy(new VersionExclusionStrategy($version));
 
         return $this;
@@ -171,7 +179,7 @@ abstract class Context
             throw new \LogicException('The groups must not be empty.');
         }
 
-        $this->attributes->set('groups', (array)$groups);
+        $this->attributes['groups'] = (array)$groups;
         $this->addExclusionStrategy(new GroupsExclusionStrategy((array)$groups));
 
         return $this;
