@@ -140,6 +140,7 @@ class Serializer implements SerializerInterface, ArrayTransformerInterface
 
         $preparedData = $visitor->prepare($data);
         $result = $this->visit($this->serializationNavigator, $visitor, $context, $preparedData, $format, $type);
+
         return $visitor->getResult($result);
     }
 

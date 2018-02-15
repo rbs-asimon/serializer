@@ -44,7 +44,10 @@ $serializer = \JMS\Serializer\SerializerBuilder::create()->build();
 $collection = createCollection();
 $metrics = array();
 $f = function () use ($serializer, $collection, $format) {
-    $serializer->serialize($collection, $format);
+    $ctx = \JMS\Serializer\SerializationContext::create();
+    $ctx->addExclusionStrategy(new \JMS\Serializer\Exclusion\DisjunctExclusionStrategy());
+
+    $serializer->serialize($collection, $format, $ctx);
 };
 
 // Load all necessary classes into memory.

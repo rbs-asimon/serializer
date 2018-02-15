@@ -18,6 +18,8 @@
 
 namespace JMS\Serializer;
 
+use JMS\Serializer\Accessor\AccessorStrategyInterface;
+use JMS\Serializer\Accessor\DefaultAccessorStrategy;
 use JMS\Serializer\Construction\ObjectConstructorInterface;
 use JMS\Serializer\EventDispatcher\EventDispatcher;
 use JMS\Serializer\EventDispatcher\EventDispatcherInterface;
@@ -27,10 +29,12 @@ use JMS\Serializer\EventDispatcher\PreSerializeEvent;
 use JMS\Serializer\Exception\ExpressionLanguageRequiredException;
 use JMS\Serializer\Exception\InvalidArgumentException;
 use JMS\Serializer\Exception\RuntimeException;
+use JMS\Serializer\Exclusion\DisjunctExclusionStrategy;
 use JMS\Serializer\Exclusion\ExpressionLanguageExclusionStrategy;
 use JMS\Serializer\Expression\ExpressionEvaluatorInterface;
 use JMS\Serializer\Handler\HandlerRegistryInterface;
 use JMS\Serializer\Metadata\ClassMetadata;
+use JMS\Serializer\Metadata\PropertyMetadata;
 use Metadata\MetadataFactoryInterface;
 
 /**
@@ -187,25 +191,146 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
                 }
 
                 $object = $data;
-                $visitor->startVisitingObject($metadata, $object, $type, $context);
-                foreach ($metadata->propertyMetadata as $propertyMetadata) {
-                    if (null !== $exclusionStrategy && $exclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
-                        continue;
+                if ($visitor instanceof JsonSerializationVisitor && !$metadata->usingExpression && ($c = $this->createCompiledHandler($metadata, new DefaultAccessorStrategy()))) {
+                    //$visitor->startVisitingObject($metadata, $object, $type, $context);
+
+                    $r = $c->visit($this, $visitor, $object, $context, $exclusionStrategy);
+
+                    $this->afterVisitingObject($metadata, $data, $type, $context);
+
+                    //$context->stopVisiting($data);
+                    //$visitor->endVisitingObject($metadata, $data, $type, $context);
+
+                    return $r;
+                } else {
+
+
+                    $visitor->startVisitingObject($metadata, $object, $type, $context);
+                    foreach ($metadata->propertyMetadata as $propertyMetadata) {
+                        if ($exclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
+                            continue;
+                        }
+
+                        if (null !== $this->expressionExclusionStrategy && $this->expressionExclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
+                            continue;
+                        }
+
+                        $context->pushPropertyMetadata($propertyMetadata);
+                        $visitor->visitProperty($propertyMetadata, $data, $context);
+                        $context->popPropertyMetadata();
                     }
 
-                    if (null !== $this->expressionExclusionStrategy && $this->expressionExclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
-                        continue;
-                    }
+                    $this->afterVisitingObject($metadata, $data, $type, $context);
 
-                    $context->pushPropertyMetadata($propertyMetadata);
-                    $visitor->visitProperty($propertyMetadata, $data, $context);
-                    $context->popPropertyMetadata();
+                    return $visitor->endVisitingObject($metadata, $data, $type, $context);
+                }
+        }
+    }
+
+
+    public function getVisitType($type)
+    {
+        switch ($type) {
+            case 'NULL':
+                return 'visitNull';
+
+            case 'string':
+                return 'visitString';
+
+            case 'int':
+            case 'integer':
+                return 'visitInteger';
+
+            case 'bool':
+            case 'boolean':
+                return 'visitBoolean';
+
+            case 'double':
+            case 'float':
+                return 'visitDouble';
+
+            case 'array':
+                return 'visitArray';
+        }
+
+        return null;
+    }
+
+    public function getAccType(PropertyMetadata $propertyMetadata, $k)
+    {
+        if ($propertyMetadata->getter) {
+            return "\$object->{$propertyMetadata->getter}()";
+        }
+        return "\$this->accessor->getValue(\$object, \$this->metadata->propertyMetadata['$k'])";
+    }
+
+    public function getAccName(PropertyMetadata $propertyMetadata, $k)
+    {
+        if ($propertyMetadata->serializedName) {
+            return "'{$propertyMetadata->serializedName}'";
+        }
+        return "'{$propertyMetadata->name}'";
+    }
+
+
+    protected $cache = array();
+
+    private function createCompiledHandler(ClassMetadata $metadata, AccessorStrategyInterface $accessorStrategy)
+    {
+        $cls = "JMS\\__CC__\\" . $metadata->name . "\\Navigator";
+
+        if (!class_exists($cls, false)) {
+            $str = "namespace JMS\\__CC__\\" . $metadata->name . ";\n";
+
+
+            $str .= "class Navigator\n{\n";
+
+            $str .= "protected \$metadata;";
+            $str .= "protected \$accessor;";
+
+            $str .= "public function __construct(\$metadata, \$accessor)\n{\n";
+            $str .= "\t\$this->metadata = \$metadata;\n";
+            $str .= "\t\$this->accessor = \$accessor;\n";
+            $str .= "\n}\n";
+            $str .= "public function visit(\$navigator, \$visitor, \$object, \$context, \$exclusionStrategy)\n{\n";
+            $str .= "\$data = [];\n";
+
+            foreach ($metadata->propertyMetadata as $k => $propertyMetadata) {
+
+                $t = $this->getVisitType($propertyMetadata->type["name"]);
+                $acc = $this->getAccType($propertyMetadata, $k);
+                $nn = $this->getAccName($propertyMetadata, $k);
+
+
+                $str .= "\tif (!\$exclusionStrategy->shouldSkipProperty(\$this->metadata->propertyMetadata['$k'], \$context)) {\n";
+
+                $str .= "\t\$i = $acc;";
+
+                $str .= "\tif (\$i === null && \$context->shouldSerializeNull() === true) {\n";
+                $str .= "\t\t\$data[{$nn}] = null;\n";
+                $str .= "\t\n} elseif (\$i !== null) {\n";
+
+                if ($t) {
+                    $str .= "\t\t\$data[{$nn}] = \$visitor->{$t}(\$i, " . var_export($propertyMetadata->type, 1) . ", \$context);\n";
+                } else {
+                    $str .= "\t\t\$data[{$nn}] = \$navigator->accept(\$i, " . var_export($propertyMetadata->type, 1) . ", \$context);\n";
                 }
 
-                $this->afterVisitingObject($metadata, $data, $type, $context);
+                $str .= "\t\n}\n";
 
-                return $visitor->endVisitingObject($metadata, $data, $type, $context);
+                $str .= "\t\n}\n";
+            }
+            $str .= "return \$data;\n";
+            $str .= "\n}\n";
+
+            $str .= "\n}\n";
+            eval($str);
         }
+
+        if (!isset($this->cache[$cls])) {
+            $this->cache[$cls] = new $cls($metadata, $accessorStrategy);
+        }
+        return $this->cache[$cls];
     }
 
     private function afterVisitingObject(ClassMetadata $metadata, $object, array $type, Context $context)
