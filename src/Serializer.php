@@ -106,7 +106,7 @@ final class Serializer implements SerializerInterface, ArrayTransformerInterface
         $this->deserializationVisitors = $deserializationVisitors;
         $this->accessorStrategy = $accessorStrategy;
 
-        $this->serializationNavigator = new SerializationGraphNavigator($this->factory, $this->handlerRegistry, $this->dispatcher, $expressionEvaluator);
+        $this->serializationNavigator = new SerializationGraphNavigator($this->factory, $this->handlerRegistry, $this->accessorStrategy, $this->dispatcher, $expressionEvaluator);
         $this->deserializationNavigator = new DeserializationGraphNavigator($this->factory, $this->handlerRegistry, $this->objectConstructor, $this->dispatcher, $expressionEvaluator);
 
         $this->serializationContextFactory = $serializationContextFactory ?: new DefaultSerializationContextFactory();

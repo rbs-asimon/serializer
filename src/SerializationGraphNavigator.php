@@ -18,17 +18,16 @@
 
 namespace JMS\Serializer;
 
-use JMS\Serializer\Construction\ObjectConstructorInterface;
+use JMS\Serializer\Accessor\AccessorStrategyInterface;
 use JMS\Serializer\EventDispatcher\EventDispatcher;
 use JMS\Serializer\EventDispatcher\EventDispatcherInterface;
 use JMS\Serializer\EventDispatcher\ObjectEvent;
-use JMS\Serializer\EventDispatcher\PreDeserializeEvent;
 use JMS\Serializer\EventDispatcher\PreSerializeEvent;
 use JMS\Serializer\Exception\CircularReferenceDetectedException;
 use JMS\Serializer\Exception\ExcludedClassException;
 use JMS\Serializer\Exception\ExpressionLanguageRequiredException;
-use JMS\Serializer\Exception\InvalidArgumentException;
 use JMS\Serializer\Exception\RuntimeException;
+use JMS\Serializer\Exclusion\ExclusionStrategyInterface;
 use JMS\Serializer\Exclusion\ExpressionLanguageExclusionStrategy;
 use JMS\Serializer\Expression\ExpressionEvaluatorInterface;
 use JMS\Serializer\Handler\HandlerRegistryInterface;
@@ -53,20 +52,25 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
     private $dispatcher;
     private $metadataFactory;
     private $handlerRegistry;
+    /**
+     * @var AccessorStrategyInterface
+     */
+    private $accessorStrategy;
 
     public function __construct(
         MetadataFactoryInterface $metadataFactory,
         HandlerRegistryInterface $handlerRegistry,
+        AccessorStrategyInterface $accessorStrategy,
         EventDispatcherInterface $dispatcher = null,
         ExpressionEvaluatorInterface $expressionEvaluator = null
-    )
-    {
+    ) {
         $this->dispatcher = $dispatcher ?: new EventDispatcher();
         $this->metadataFactory = $metadataFactory;
         $this->handlerRegistry = $handlerRegistry;
         if ($expressionEvaluator) {
             $this->expressionExclusionStrategy = new ExpressionLanguageExclusionStrategy($expressionEvaluator);
         }
+        $this->accessorStrategy = $accessorStrategy;
     }
 
     /**
@@ -189,20 +193,28 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
                 }
 
                 $visitor->startVisitingObject($metadata, $data, $type, $context);
-                foreach ($metadata->propertyMetadata as $propertyMetadata) {
-                    if ($exclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
-                        continue;
-                    }
 
-                    if (null !== $this->expressionExclusionStrategy && $this->expressionExclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
-                        continue;
-                    }
+                if (!$metadata->usingExpression && $exclusionStrategy->getSignature() !== null) {
 
-                    $context->pushPropertyMetadata($propertyMetadata);
-                    $visitor->visitProperty($propertyMetadata, $data, $context);
-                    $context->popPropertyMetadata();
+                    $compiledNavigator = $this->createCompiledHandler($exclusionStrategy, $metadata, $context);
+                    $compiledNavigator->accept($data, $visitor, $context);
+
+                } else {
+
+                    foreach ($metadata->propertyMetadata as $propertyMetadata) {
+                        if ($exclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
+                            continue;
+                        }
+
+                        if (null !== $this->expressionExclusionStrategy && $this->expressionExclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
+                            continue;
+                        }
+
+                        $context->pushPropertyMetadata($propertyMetadata);
+                        $visitor->visitProperty($propertyMetadata, $data, $context);
+                        $context->popPropertyMetadata();
+                    }
                 }
-
                 $this->afterVisitingObject($metadata, $data, $type, $context);
 
                 return $visitor->endVisitingObject($metadata, $data, $type, $context);
@@ -222,4 +234,55 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
             $this->dispatcher->dispatch('serializer.post_serialize', $metadata->name, $context->getFormat(), new ObjectEvent($context, $object, $type));
         }
     }
+
+    protected $cache = array();
+
+    private function createCompiledHandler(ExclusionStrategyInterface $exclusionStrategy, ClassMetadata $metadata, Context $context)
+    {
+
+        $key = $metadata->name . $exclusionStrategy->getSignature();
+
+        if (!isset($this->cache[$key])) {
+
+            $identity = md5($key);
+
+            $vapart = "JMS\\__CC__\\Id" . $identity;
+
+            $cls = "$vapart\\Navigator";
+
+            if (!class_exists($cls, false)) {
+                $str = "namespace $vapart;\n";
+                $str .= "class Navigator\n{\n";
+                $str .= "\tprotected \$propertyMetadata;\n";
+                $str .= "public function __construct(\JMS\Serializer\Metadata\ClassMetadata \$metadata)\n{\n";
+                $str .= "\t\$this->propertyMetadata = \$metadata->propertyMetadata;\n";
+                $str .= "\n}\n";
+                $str .= "public function accept(\$data, \$visitor, \\JMS\\Serializer\\Context \$context)\n{\n";
+
+                foreach ($metadata->propertyMetadata as $k => $propertyMetadata) {
+                    if ($exclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
+                        continue;
+                    }
+
+                    $str .= "\t\$m = \$this->propertyMetadata['$k'];\n";
+                    $str .= "\t\$context->pushPropertyMetadata(\$m);\n";
+                    $str .= "\t\$visitor->visitProperty(\$m, \$data, \$context);\n";
+                    $str .= "\t\$context->popPropertyMetadata();\n\n";
+                }
+
+                $str .= "\n}\n";
+                $str .= "\n}\n";
+
+                $name = sys_get_temp_dir()."/$identity";
+                file_put_contents($name,"<?php $str");
+                require $name;
+
+            }
+
+            $this->cache[$key] = new $cls($metadata);
+        }
+        return $this->cache[$key];
+    }
 }
+
+

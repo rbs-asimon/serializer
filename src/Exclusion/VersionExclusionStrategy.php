@@ -54,4 +54,9 @@ class VersionExclusionStrategy implements ExclusionStrategyInterface
 
         return false;
     }
+
+    public function getSignature(): ?string
+    {
+        return $this->version;
+    }
 }

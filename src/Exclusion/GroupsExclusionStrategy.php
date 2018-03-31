@@ -64,4 +64,9 @@ class GroupsExclusionStrategy implements ExclusionStrategyInterface
 
         return true;
     }
+
+    public function getSignature(): ?string
+    {
+        return implode(",", array_keys($this->groups));
+    }
 }
