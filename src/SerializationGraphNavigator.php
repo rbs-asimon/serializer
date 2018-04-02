@@ -180,6 +180,31 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
                     throw new ExpressionLanguageRequiredException("To use conditional exclude/expose in {$metadata->name} you must configure the expression language.");
                 }
 
+                $compiledNavigator = null;
+                if (!$metadata->usingExpression && $exclusionStrategy->getSignature() !== null) {
+
+                    $compiledNavigator = $this->createCompiledHandler($exclusionStrategy, $metadata, $context);
+
+                    if ($compiledNavigator->shouldSkipClass) {
+                        $context->stopVisiting($data);
+                        throw new ExcludedClassException();
+                    }
+
+                    $context->pushClassMetadata($metadata);
+
+                    foreach ($metadata->preSerializeMethods as $method) {
+                        $method->invoke($data);
+                    }
+
+                    $visitor->startVisitingObject($metadata, $data, $type, $context);
+
+                    $compiledNavigator->accept($data, $visitor, $context);
+
+                    $this->afterVisitingObject($metadata, $data, $type, $context);
+
+                    return $visitor->endVisitingObject($metadata, $data, $type, $context);
+                }
+
                 if ($exclusionStrategy->shouldSkipClass($metadata, $context)) {
                     $context->stopVisiting($data);
 
@@ -194,34 +219,27 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
 
                 $visitor->startVisitingObject($metadata, $data, $type, $context);
 
-                if (!$metadata->usingExpression && $exclusionStrategy->getSignature() !== null) {
-
-                    $compiledNavigator = $this->createCompiledHandler($exclusionStrategy, $metadata, $context);
-                    $compiledNavigator->accept($data, $visitor, $context);
-
-                } else {
-
-                    foreach ($metadata->propertyMetadata as $propertyMetadata) {
-                        if ($exclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
-                            continue;
-                        }
-
-                        if (null !== $this->expressionExclusionStrategy && $this->expressionExclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
-                            continue;
-                        }
-
-                        $context->pushPropertyMetadata($propertyMetadata);
-                        $visitor->visitProperty($propertyMetadata, $data, $context);
-                        $context->popPropertyMetadata();
+                foreach ($metadata->propertyMetadata as $propertyMetadata) {
+                    if ($exclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
+                        continue;
                     }
+
+                    if (null !== $this->expressionExclusionStrategy && $this->expressionExclusionStrategy->shouldSkipProperty($propertyMetadata, $context)) {
+                        continue;
+                    }
+
+                    $context->pushPropertyMetadata($propertyMetadata);
+                    $visitor->visitProperty($propertyMetadata, $data, $context);
+                    $context->popPropertyMetadata();
                 }
+
                 $this->afterVisitingObject($metadata, $data, $type, $context);
 
                 return $visitor->endVisitingObject($metadata, $data, $type, $context);
         }
     }
 
-    private function afterVisitingObject(ClassMetadata $metadata, $object, array $type, Context $context)
+    private function afterVisitingObject(ClassMetadata $metadata, $object, array $type, SerializationContext $context)
     {
         $context->stopVisiting($object);
         $context->popClassMetadata();
@@ -240,7 +258,7 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
     private function createCompiledHandler(ExclusionStrategyInterface $exclusionStrategy, ClassMetadata $metadata, Context $context)
     {
 
-        $key = $metadata->name . $exclusionStrategy->getSignature();
+        $key = $metadata->name . $exclusionStrategy->getSignature() . $context->getFormat() . $context->getDirection();
 
         if (!isset($this->cache[$key])) {
 
@@ -254,8 +272,16 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
                 $str = "namespace $vapart;\n";
                 $str .= "class Navigator\n{\n";
                 $str .= "\tprotected \$propertyMetadata;\n";
+
+                if ($exclusionStrategy->shouldSkipClass($metadata, $context)) {
+                    $str .= "\tpublic \$shouldSkipClass = true;\n";
+                } else {
+                    $str .= "\tpublic \$shouldSkipClass = false;\n";
+                }
+
                 $str .= "public function __construct(\JMS\Serializer\Metadata\ClassMetadata \$metadata)\n{\n";
                 $str .= "\t\$this->propertyMetadata = \$metadata->propertyMetadata;\n";
+
                 $str .= "\n}\n";
                 $str .= "public function accept(\$data, \$visitor, \\JMS\\Serializer\\Context \$context)\n{\n";
 
@@ -271,10 +297,10 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
                 }
 
                 $str .= "\n}\n";
-                $str .= "\n}\n";
 
-                $name = sys_get_temp_dir()."/$identity";
-                file_put_contents($name,"<?php $str");
+                $str .= "\n}\n";
+                $name = sys_get_temp_dir() . "/$identity";
+                file_put_contents($name, "<?php $str");
                 require $name;
 
             }
@@ -284,5 +310,7 @@ final class SerializationGraphNavigator implements GraphNavigatorInterface
         return $this->cache[$key];
     }
 }
+
+
 
 
